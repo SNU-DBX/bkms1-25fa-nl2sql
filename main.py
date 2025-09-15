@@ -1,5 +1,6 @@
 import os
 import datetime
+import sys
 from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -8,28 +9,47 @@ from langchain.agents import create_sql_agent
 from langchain.memory import ConversationBufferMemory
 
 from sqlalchemy import create_engine, MetaData, Table
+from sqlalchemy.engine.url import make_url
 
-# --- 데이터베이스 로깅 설정 ---
+# Import function and variable from database_setup.py
+from database_setup import setup_database as setup_test_database, TEST_DATABASE_NAME
+
+# --- Database Logging Setup ---
+# Logging is always recorded in the 'query_history' table of the test database.
+LOGGING_DATABASE_NAME = TEST_DATABASE_NAME
 engine = None
 query_history_table = None
 
 def setup_logging():
-    """로깅을 위한 데이터베이스 연결 및 테이블 객체를 초기화합니다."""
+    """
+    Initializes the connection to the dedicated logging database ('testnl2sql') and the table object.
+    It gets connection info from the DATABASE_URL in .env but hardcodes the database name to 'testnl2sql'.
+    """
     global engine, query_history_table
-    DATABASE_URL = os.getenv("DATABASE_URL")
-    if not DATABASE_URL:
-        print("경고: 로깅을 위한 DATABASE_URL이 .env에 설정되지 않았습니다. 로그가 기록되지 않습니다.")
+    BASE_DATABASE_URL = os.getenv("DATABASE_URL")
+    if not BASE_DATABASE_URL:
+        print(f"Warning: DATABASE_URL for logging is not set in .env. Logs for {LOGGING_DATABASE_NAME} will not be recorded.")
         return
-    
-    engine = create_engine(DATABASE_URL)
-    metadata = MetaData()
-    # 데이터베이스에서 기존 테이블 정보를 읽어옵니다.
-    query_history_table = Table('query_history', metadata, autoload_with=engine)
+
+    try:
+        # Parse the URL and change only the database name to LOGGING_DATABASE_NAME
+        base_url = make_url(BASE_DATABASE_URL)
+        log_db_url = base_url.set(database=LOGGING_DATABASE_NAME)
+        
+        engine = create_engine(log_db_url)
+        metadata = MetaData()
+        # Load existing table information from the database.
+        query_history_table = Table('query_history', metadata, autoload_with=engine)
+        print(f"Connected to logging database '{engine.url.database}'.")
+    except Exception as e:
+        print(f"Warning: Logging database connection failed. Logs will not be recorded. Error: {e}")
+        engine = None
+        query_history_table = None
 
 def log_interaction(user_query, generated_sql, status, final_response):
-    """상호작용 내역을 query_history 테이블에 기록합니다."""
+    """Logs the interaction details to the query_history table."""
     if engine is None or query_history_table is None:
-        return # 로깅 설정이 안되어 있으면 함수 종료
+        return # If logging is not set up, exit the function
 
     with engine.connect() as connection:
         try:
@@ -43,40 +63,64 @@ def log_interaction(user_query, generated_sql, status, final_response):
             connection.execute(insert_stmt)
             connection.commit()
         except Exception as e:
-            print(f"데이터베이스에 로그 기록 실패: {e}")
+            print(f"Failed to write log to database: {e}")
 
 def main():
     """
-    메인 실행 함수: 대화형 CLI를 처리하고 모든 상호작용을 기록합니다.
+    Main execution function: Handles the interactive CLI and logs all interactions.
     """
-    # 1. 환경 변수 로드
+    # 1. Load environment variables
     load_dotenv()
 
     if not os.getenv("GOOGLE_API_KEY") or not os.getenv("DATABASE_URL"):
-        raise ValueError(".env 파일에 GOOGLE_API_KEY 또는 DATABASE_URL이 설정되지 않았습니다.")
+        raise ValueError("GOOGLE_API_KEY or DATABASE_URL is not set in the .env file.")
 
-    print("환경 변수 로드 완료.")
+    print("Environment variables loaded successfully.")
 
-    # 로깅을 위한 데이터베이스 연결 설정
-    try:
-        setup_logging()
-        print("데이터베이스 로깅 기능 활성화 완료.")
-    except Exception as e:
-        print(f"경고: 데이터베이스 로깅 기능 활성화 실패. 로그가 기록되지 않습니다. 오류: {e}")
+    # 2. Select database to use
+    print("\nWhich database would you like to connect to?")
+    print(f"  1. Test Database ({TEST_DATABASE_NAME})")
+    print("  2. Database specified in .env file")
+    choice = input("Select (1 or 2): ")
 
-    # 2. LLM 초기화
+    db_url_to_use = None
+    base_db_url_str = os.getenv("DATABASE_URL")
+
+    if choice == '1':
+        print("\nChecking and preparing the test database...")
+        setup_test_database() # Create/verify database and tables
+        
+        # Create URL for the test DB
+        url_obj = make_url(base_db_url_str)
+        test_db_url = url_obj.set(database=TEST_DATABASE_NAME)
+        db_url_to_use = str(test_db_url)
+        print(f"Using the test database '{TEST_DATABASE_NAME}'.")
+
+    elif choice == '2':
+        db_url_to_use = base_db_url_str
+        print("Using the database specified in .env.")
+    
+    else:
+        print("Invalid choice. Exiting program.", file=sys.stderr)
+        sys.exit(1)
+
+    # Set up logging database connection (uses testnl2sql regardless of choice)
+    # If test DB was chosen, setup_test_database() was already called, so the logging DB is ready.
+    setup_logging()
+
+    # 3. Initialize LLM
     llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
-    print("Gemini LLM 초기화 완료.")
+    print("Gemini LLM initialized successfully.")
 
-    # 3. 에이전트용 데이터베이스 연결
-    db = SQLDatabase.from_uri(os.getenv("DATABASE_URL"))
-    print("에이전트용 데이터베이스 연결 완료.")
+    # 4. Connect agent to the database (the one chosen by the user)
+    db = SQLDatabase.from_uri(db_url_to_use)
+    print(f"Agent connected to database '{db.engine.url.database}'.")
 
-    # 4. 대화 메모리 설정
+    # 5. Set up conversation memory
     memory = ConversationBufferMemory(memory_key="chat_history", input_key="input", return_messages=True)
-    print("대화 메모리 생성 완료.")
+    print("Conversation memory created successfully.")
 
-    # 5. SQL 에이전트 생성 (메모리 및 중간 단계 반환 기능 추가)
+    # 6. Create SQL Agent
     agent_executor = create_sql_agent(
         llm=llm,
         db=db,
@@ -84,29 +128,27 @@ def main():
         verbose=True,
         memory=memory,
         handle_parsing_errors=True,
-        return_intermediate_steps=True # 생성된 SQL을 얻기 위해 중간 단계 반환
+        return_intermediate_steps=True
     )
-    print("SQL 에이전트 생성 완료. 이제 대화형 챗봇을 시작합니다.")
-    print("종료하시려면 'exit' 또는 '종료'를 입력하세요.")
+    print("\nSQL Agent created successfully. Starting the interactive chatbot now.")
+    print("To exit, type 'exit'.")
 
-    # 6. 대화형 CLI 루프
+    # 7. Interactive CLI loop
     while True:
-        user_input = input("\n[사용자]: ")
-        if user_input.lower() in ["exit", "종료"]:
-            print("챗봇을 종료합니다.")
+        user_input = input("\n[User]: ")
+        if user_input.lower() == "exit":
+            print("Exiting the chatbot.")
             break
         
         generated_sql = "N/A"
-        final_answer = "오류 발생"
+        final_answer = "An error occurred"
         status = "Error"
 
         try:
-            # 에이전트 실행
             response = agent_executor.invoke({"input": user_input})
-            final_answer = response.get("output", "답변을 찾을 수 없습니다.")
-            print("[챗봇]:", final_answer)
+            final_answer = response.get("output", "Could not find an answer.")
+            print("[Chatbot]:", final_answer)
 
-            # 중간 단계에서 SQL 추출
             if response.get("intermediate_steps"):
                 for step in response["intermediate_steps"]:
                     if step[0].tool == 'sql_db_query':
@@ -115,11 +157,10 @@ def main():
             status = "Success"
 
         except Exception as e:
-            final_answer = f"오류가 발생했습니다: {e}"
+            final_answer = f"An error occurred: {e}"
             print(final_answer)
             status = "Error"
         
-        # DB에 상호작용 기록
         log_interaction(
             user_query=user_input,
             generated_sql=generated_sql,

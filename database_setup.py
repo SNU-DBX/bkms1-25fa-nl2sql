@@ -9,60 +9,60 @@ import datetime
 # --- Configuration ---
 TEST_DATABASE_NAME = "testnl2sql"
 
-# .env 파일에서 환경 변수 로드
+# Load environment variables from .env file
 load_dotenv()
 
-# 기본 데이터베이스 연결 URL 가져오기 (DB 생성을 위해)
+# Get the base database connection URL (for creating the DB)
 BASE_DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not BASE_DATABASE_URL:
-    raise ValueError("DATABASE_URL 환경 변수가 설정되지 않았습니다. .env 파일을 확인하세요.")
+    raise ValueError("DATABASE_URL environment variable is not set. Please check your .env file.")
 
 def setup_database():
     """
-    테스트용 데이터베이스와 테이블, 샘플 데이터를 설정합니다.
-    1. 'testnl2sql' 데이터베이스를 생성합니다.
-    2. 해당 데이터베이스에 'test_users', 'test_orders', 'query_history' 테이블을 생성합니다.
-    3. 'test_users', 'test_orders'에 샘플 데이터를 삽입합니다.
+    Sets up the test database, tables, and sample data.
+    1. Creates the 'testnl2sql' database.
+    2. Creates 'test_users', 'test_orders', and 'query_history' tables in that database.
+    3. Inserts sample data into 'test_users' and 'test_orders'.
     """
     try:
         base_url = make_url(BASE_DATABASE_URL)
-        # 데이터베이스를 생성하려면 'postgres'와 같은 기본 DB에 연결해야 합니다.
+        # To create a database, you need to connect to a default DB like 'postgres'.
         db_creation_url = base_url.set(database="postgres")
         
         engine = create_engine(db_creation_url, isolation_level="AUTOCOMMIT")
         with engine.connect() as connection:
-            # 데이터베이스 존재 여부 확인
+            # Check if the database exists
             result = connection.execute(text(f"SELECT 1 FROM pg_database WHERE datname='{TEST_DATABASE_NAME}'"))
             db_exists = result.scalar() == 1
             
             if not db_exists:
-                print(f"'{TEST_DATABASE_NAME}' 데이터베이스를 생성합니다...")
+                print(f"Creating database '{TEST_DATABASE_NAME}'...")
                 connection.execute(text(f"CREATE DATABASE {TEST_DATABASE_NAME}"))
-                print("데이터베이스 생성 완료.")
+                print("Database created successfully.")
             else:
-                print(f"'{TEST_DATABASE_NAME}' 데이터베이스가 이미 존재합니다.")
+                print(f"Database '{TEST_DATABASE_NAME}' already exists.")
 
     except OperationalError as e:
-        print(f"데이터베이스 연결 오류: {e}")
-        print(".env 파일의 DATABASE_URL이 정확한지, PostgreSQL 서버가 실행 중인지 확인하세요.")
+        print(f"Database connection error: {e}")
+        print("Please ensure the DATABASE_URL in your .env file is correct and the PostgreSQL server is running.")
         return
     except Exception as e:
-        print(f"데이터베이스 생성 중 오류 발생: {e}")
+        print(f"An error occurred during database creation: {e}")
         return
 
-    # 이제 새로 생성/확인된 testnl2sql 데이터베이스에 연결합니다.
+    # Now, connect to the newly created/verified testnl2sql database.
     test_db_url = base_url.set(database=TEST_DATABASE_NAME)
     engine = create_engine(test_db_url)
     Session = sessionmaker(bind=engine)
     session = Session()
 
     try:
-        print(f"'{TEST_DATABASE_NAME}' 데이터베이스에 성공적으로 연결되었습니다.")
+        print(f"Successfully connected to the '{TEST_DATABASE_NAME}' database.")
         
         metadata = MetaData()
 
-        # 'test_users' 테이블 정의
+        # Define 'test_users' table
         users_table = Table('test_users', metadata,
             Column('user_id', Integer, primary_key=True),
             Column('username', String(50), nullable=False),
@@ -70,7 +70,7 @@ def setup_database():
             Column('registration_date', DateTime, default=datetime.datetime.utcnow)
         )
 
-        # 'test_orders' 테이블 정의
+        # Define 'test_orders' table
         orders_table = Table('test_orders', metadata,
             Column('order_id', Integer, primary_key=True),
             Column('user_id', Integer, nullable=False),
@@ -78,7 +78,7 @@ def setup_database():
             Column('order_date', DateTime, default=datetime.datetime.utcnow)
         )
 
-        # 'query_history' 테이블 정의 (이것은 실제 사용될 테이블)
+        # Define 'query_history' table (this is the table that will be actually used)
         query_history_table = Table('query_history', metadata,
             Column('id', Integer, primary_key=True),
             Column('timestamp', DateTime, default=datetime.datetime.utcnow),
@@ -89,9 +89,9 @@ def setup_database():
         )
 
         metadata.create_all(engine)
-        print("테이블('test_users', 'test_orders', 'query_history')이 성공적으로 생성되었습니다.")
+        print("Tables ('test_users', 'test_orders', 'query_history') created successfully.")
 
-        # 샘플 데이터 추가 (기존 데이터가 없을 경우)
+        # Add sample data (if it doesn't exist)
         if session.query(users_table).count() == 0:
             sample_users = [
                 {'user_id': 1, 'username': 'Alice', 'email': 'alice@example.com', 'registration_date': datetime.datetime(2023, 1, 15)},
@@ -100,9 +100,9 @@ def setup_database():
             ]
             session.execute(users_table.insert(), sample_users)
             session.commit()
-            print("샘플 'test_users' 데이터가 추가되었습니다.")
+            print("Sample 'test_users' data has been added.")
         else:
-            print("'test_users' 테이블에 이미 데이터가 존재합니다.")
+            print("Data already exists in the 'test_users' table.")
 
         if session.query(orders_table).count() == 0:
             sample_orders = [
@@ -113,17 +113,17 @@ def setup_database():
             ]
             session.execute(orders_table.insert(), sample_orders)
             session.commit()
-            print("샘플 'test_orders' 데이터가 추가되었습니다.")
+            print("Sample 'test_orders' data has been added.")
         else:
-            print("'test_orders' 테이블에 이미 데이터가 존재합니다.")
+            print("Data already exists in the 'test_orders' table.")
 
-        print("\n✅ 테스트 데이터베이스 설정이 완료되었습니다.")
-        print(f"데이터베이스 이름: {TEST_DATABASE_NAME}")
-        print("이제 메인 애플리케이션에서는 .env 파일의 DATABASE_URL에 이 데이터베이스를 사용하도록 설정할 수 있습니다.")
-        print(f"예: DATABASE_URL=postgresql://user:password@host:port/{TEST_DATABASE_NAME}")
+        print("\n✅ Test database setup is complete.")
+        print(f"Database Name: {TEST_DATABASE_NAME}")
+        print("You can now set the DATABASE_URL in your .env file to use this database in the main application.")
+        print(f"Example: DATABASE_URL=postgresql://user:password@host:port/{TEST_DATABASE_NAME}")
 
     except Exception as e:
-        print(f"테이블 생성 또는 데이터 삽입 중 오류 발생: {e}")
+        print(f"An error occurred during table creation or data insertion: {e}")
     finally:
         session.close()
 
