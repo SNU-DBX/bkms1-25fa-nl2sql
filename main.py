@@ -4,9 +4,12 @@ import sys
 from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_together import ChatTogether
 from langchain.sql_database import SQLDatabase
 from langchain.agents import create_sql_agent
 from langchain.memory import ConversationBufferMemory
+from langchain_core.rate_limiters import InMemoryRateLimiter
+
 
 from sqlalchemy import create_engine, MetaData, Table
 from sqlalchemy.engine.url import make_url
@@ -109,12 +112,19 @@ def main():
     setup_logging()
 
     # 3. Initialize LLM
-    llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
+    # llm = ChatTogether(model="deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free", temperature=0, max_retries=3)
+    rate_limiter = InMemoryRateLimiter(
+        requests_per_second=0.15,  # We can only make a request once every 6.67 seconds!!
+        check_every_n_seconds=0.5,  # Wake up every 100 ms to check whether allowed to make a request,
+        max_bucket_size=3,  # Controls the maximum burst size.
+    )
+
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.5, max_retries=2, rate_limiter=rate_limiter)
     print("Gemini LLM initialized successfully.")
 
     # 4. Connect agent to the database (the one chosen by the user)
     db = SQLDatabase.from_uri(db_url_to_use)
-    print(f"Agent connected to database '{db.engine.url.database}'.")
+    print(f"Agent connected to database '{db._engine.url.database}'.")
 
     # 5. Set up conversation memory
     memory = ConversationBufferMemory(memory_key="chat_history", input_key="input", return_messages=True)
@@ -124,7 +134,7 @@ def main():
     agent_executor = create_sql_agent(
         llm=llm,
         db=db,
-        agent_type="zero-shot-react-description",
+        agent_type="tool-calling",
         verbose=True,
         memory=memory,
         handle_parsing_errors=True,
