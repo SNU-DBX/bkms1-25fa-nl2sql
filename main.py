@@ -4,7 +4,6 @@ import sys
 from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_together import ChatTogether
 from langchain.sql_database import SQLDatabase
 from langchain.agents import create_sql_agent
 from langchain.memory import ConversationBufferMemory
