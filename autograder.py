@@ -1,14 +1,15 @@
-
 import os
 import sys
 import glob
 import importlib.util
 from pathlib import Path
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, text, inspect
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine.url import make_url
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.sql_database import SQLDatabase
 from langchain.agents import create_sql_agent
+from langchain_core.rate_limiters import InMemoryRateLimiter
 
 # --- Configuration ---
 SUBMISSIONS_DIR = "/opt/pm883-1/dongkwang/ta/nl2sql/submissions"
@@ -53,21 +54,30 @@ def main():
     test_db_url = db_url_obj.set(database=TEST_DATABASE_NAME)
     
     try:
-        engine = create_engine(test_db_url)
+        engine = create_engine(str(test_db_url))
         with engine.connect() as conn:
-            # Check if DB is connectable
             pass
         print(f"Successfully connected to test database: {TEST_DATABASE_NAME}")
     except Exception as e:
         print(f"FATAL: Could not connect to test database '{TEST_DATABASE_NAME}'. Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
+    # LLM and Rate Limiter setup, mirroring main.py
+    rate_limiter = InMemoryRateLimiter(
+        requests_per_second=0.15,
+        check_every_n_seconds=0.5,
+        max_bucket_size=3,
+    )
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.5, max_retries=2, rate_limiter=rate_limiter)
+    print("Gemini LLM initialized successfully (matching main.py setup).")
+
     db_for_agent = SQLDatabase(engine=engine)
+    
+    # Agent setup, mirroring main.py but without memory for independent queries
     agent_executor = create_sql_agent(
         llm=llm,
         db=db_for_agent,
-        agent_type="zero-shot-react-description",
+        agent_type="tool-calling",
         verbose=False, # Set to True for debugging
         handle_parsing_errors=True,
         return_intermediate_steps=True
@@ -87,11 +97,9 @@ def main():
         submission_id = Path(sub_dir).name.split('_')[-1]
         print(f"\nProcessing submission: {submission_id}")
 
-        # Create output directory for the submission
         output_dir = Path(RESULTS_DIR) / submission_id
         output_dir.mkdir(exist_ok=True)
 
-        # Find the query file
         query_files = glob.glob(f"{sub_dir}/*queries*.py")
         if not query_files:
             print(f"  - ERROR: No '*queries.py' file found in {sub_dir}. Skipping.")
@@ -99,7 +107,6 @@ def main():
         
         query_file_path = query_files[0]
 
-        # Load the queries list from the file
         try:
             spec = importlib.util.spec_from_file_location("nl_queries_module", query_file_path)
             queries_module = importlib.util.module_from_spec(spec)
@@ -115,7 +122,6 @@ def main():
             output_content = [f"--- Autograder Result for Submission {submission_id}, Query {i} ---\n"]
             output_content.append(f"[Natural Language Query]:\n{nl_query}\n")
 
-            # A. Generate SQL from NL
             generated_sql = "N/A"
             try:
                 response = agent_executor.invoke({"input": nl_query})
@@ -129,11 +135,9 @@ def main():
             
             output_content.append(f"[Generated SQL]:\n{generated_sql}\n")
 
-            # B. Execute Generated SQL
             gen_result, _ = execute_sql(engine, generated_sql)
             output_content.append(f"[Result of Generated SQL]:{gen_result}\n")
 
-            # C. Read and Execute Golden SQL
             golden_query_path = Path(SOLUTION_QUERIES_DIR) / f"query-{i}.sql"
             golden_sql = "N/A"
             golden_result = "(Golden query file not found)"
@@ -145,7 +149,6 @@ def main():
             output_content.append(f"[Golden SQL from {golden_query_path.name}]:\n{golden_sql}\n")
             output_content.append(f"[Result of Golden SQL]:{golden_result}\n")
 
-            # D. Write output file
             output_file_path = output_dir / f"result-{i}.txt"
             output_file_path.write_text("\n".join(output_content))
             print("Done.")
